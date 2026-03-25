@@ -33,20 +33,6 @@ const ENCAB_TERRENOS = [
   "Contacto","Factibilidad de energia","Detalles de aportación"
 ];
 
-/************* MENÚ *************/
-function onOpen() {
-  const ui = SpreadsheetApp.getUi();
-  ui.createMenu("⚙️ Acciones")
-    .addItem("Actualizar inventario ahora", "copiarDatosInventario")
-    .addSeparator()
-    .addItem("Actualizar solo Naves", "actualizarNaves")
-    .addItem("Actualizar solo Terrenos", "actualizarTerrenos")
-    .addSeparator()
-    .addItem("Probar conexión", "probarConexion")
-    .addItem("Exportar a Propuestas Comerciales", "exportarFilasVisiblesAFijo")
-      .addToUi();
-}
-
 /************* FUNCIONES PRINCIPALES *************/
 function copiarDatosInventario() {
   const t0 = Date.now();
