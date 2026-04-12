@@ -2,58 +2,75 @@
 <html>
 <head>
   <style>
-    body { font-family: sans-serif; padding: 10px; }
-    input { width: 90%; padding: 8px; margin-bottom: 5px; }
-    button { width: 95%; padding: 10px; background: #1a73e8; color: white; border: none; cursor: pointer; }
-    #status { color: #666; font-size: 11px; margin: 5px 0; }
-    #res { margin-top: 10px; font-size: 13px; height: 80vh; overflow-y: auto; }
-    .campo { border-bottom: 1px solid #eee; padding: 5px 0; }
-    .label { color: blue; font-weight: bold; font-size: 10px; display: block; }
-    a { color: #1a73e8; text-decoration: none; }
-    a:hover { text-decoration: underline; }
+    body { font-family: 'Segoe UI', sans-serif; padding: 10px; background-color: #f8f9fa; }
+    input { width: 90%; padding: 10px; margin-bottom: 8px; border: 1px solid #ccc; border-radius: 4px; }
+    button { width: 96%; padding: 12px; background: #1a73e8; color: white; border: none; cursor: pointer; border-radius: 4px; font-weight: bold; }
+    button:hover { background: #1557b0; }
+    .btn-pdf { background: #0f9d58; margin-bottom: 15px; width: 96%; }
+    .btn-pdf:hover { background: #0b8043; }
+    #status { color: #666; font-size: 11px; margin: 5px 0; min-height: 15px; }
+    #res { margin-top: 10px; font-size: 13px; height: 75vh; overflow-y: auto; background: white; padding: 8px; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    .campo { border-bottom: 1px solid #eee; padding: 6px 0; }
+    .label { color: #1a73e8; font-weight: bold; font-size: 10px; display: block; text-transform: uppercase; margin-bottom: 2px; }
+    a { color: #1a73e8; text-decoration: none; font-weight: 500; }
+    .aviso-no-pdf { background:#fff3cd; color:#856404; padding:8px; border-radius:4px; margin-bottom:10px; font-size:11px; text-align:center; border:1px solid #ffeeba; }
   </style>
 </head>
 <body>
-<input type="text" id="ref" placeholder="Ej: N3011" onkeydown="if(event.key==='Enter') buscar()">
-  <button onclick="buscar()">CONSULTAR</button>
+  <input type="text" id="ref" placeholder="Ej: N3011" onkeydown="if(event.key==='Enter') buscar()">
+  <button onclick="buscar()">CONSULTAR NAVE</button>
   <div id="status">Esperando...</div>
   <div id="res"></div>
 
   <script>
   function buscar() {
     const val = document.getElementById('ref').value.trim().toUpperCase();
+    if(!val) { document.getElementById('status').innerHTML = "⚠️ Escribe una REF"; return; }
+
     const valConN = val.startsWith('N') ? val : 'N' + val;
     const status = document.getElementById('status');
     const resDiv = document.getElementById('res');
 
-    if(!val) { status.innerHTML = "Escribe algo"; return; }
-    
-    status.innerHTML = "⏳ Llamando a Google...";
+    status.innerHTML = "⏳ Buscando en inventario...";
     resDiv.innerHTML = "";
 
     google.script.run
       .withSuccessHandler(response => {
-        status.innerHTML = "✅ Respuesta recibida";
         if(response.startsWith("Error") || response.startsWith("No se encontró")) {
+          status.innerHTML = "❌ No encontrado";
           resDiv.innerHTML = "<b style='color:red'>" + response + "</b>";
           return;
         }
+
         const info = JSON.parse(response);
-        let h = "";
-        for(let k in info) {
-          let valor = info[k];
 
-          // Si el valor es una URL, convertirlo en enlace clickeable
-          if(valor && typeof valor === "string" && valor.startsWith("http")) {
-            valor = `<a href="${valor}" target="_blank" rel="noopener noreferrer">📍 ${valor}</a>`;
-          }
+        // Pedimos el link que se acaba de importar en la hoja local
+        google.script.run
+          .withSuccessHandler(urlFicha => {
+            let h = "";
+            
+            if(urlFicha) {
+              h += `<button class="btn-pdf" onclick="window.open('${urlFicha}', '_blank')">📄 ABRIR FICHA PDF</button>`;
+            } else {
+              h += `<div class="aviso-no-pdf">⚠️ Esta nave no tiene PDF vinculado hoy</div>`;
+            }
 
-          h += `<div class="campo"><span class="label">${k}</span>${valor}</div>`;
-        }
-        resDiv.innerHTML = h;
+            for(let k in info) {
+              if (k === "Ficha") continue; 
+              let valor = info[k];
+              if(valor && typeof valor === "string" && valor.startsWith("http")) {
+                valor = `<a href="${valor}" target="_blank">📍 VER ENLACE</a>`;
+              }
+              h += `<div class="campo"><span class="label">${k}</span>${valor}</div>`;
+            }
+            
+            resDiv.innerHTML = h;
+            status.innerHTML = "✅ Datos cargados";
+          })
+          .obtenerLinkFichaDesdeCelda(valConN);
       })
       .withFailureHandler(err => {
-        status.innerHTML = "❌ ERROR DE CONEXIÓN";
+        status.innerHTML = "❌ ERROR";
         resDiv.innerHTML = "Detalle: " + err.message;
       })
       .buscarNaveEnServidor(valConN);

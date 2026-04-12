@@ -1,9 +1,8 @@
 /**
  * @OnlyCurrentDoc
  * Exporta los datos filtrados desde "Naves" al archivo fijo de propuestas.
- * Crea una pestaña con el nombre del cliente (sin fecha) y actualiza el Menú.
+ * Ajustado para mantener Hipervínculos (Ficha) y Formatos Visuales usando la lógica de hoja temporal.
  */
-
 function exportarFilasVisiblesAFijo() {
   const ui = SpreadsheetApp.getUi();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -13,14 +12,13 @@ function exportarFilasVisiblesAFijo() {
   const filtro = hojaOrigen.getFilter();
   if (!filtro) return ui.alert("❌ Aplica un filtro antes de exportar.");
 
-  // 🔹 DESTINO: Archivo “Propuestas comerciales”
   const ID_DESTINO = "1vodBL6mNl6rkrjuNdQEnIktC8TlRzHS-J446piiKbJE";
 
   const columnasDeseadas = [
     "Intermediario", "Operación", "Ficha", "REF", "Estado", "Zona Principal", "Sub Zona",
     "Desarrollador", "Parque", "Nave", "M2 de construcción", "M2 de terreno",
     "Asking price /m2", "Mantenimiento / m2", "Disponibilidad","Energía (kVAs)", "Comentarios", "Coordenadas", "Ubicación", "Altura libre", "Altura máxima"
-   ];
+  ];
 
   try {
     const respuesta = ui.prompt("Nombre de la propuesta", "Escribe el nombre del cliente:", ui.ButtonSet.OK_CANCEL);
@@ -29,14 +27,18 @@ function exportarFilasVisiblesAFijo() {
 
     ss.toast("Copiando datos filtrados...", "Paso 1/3", -1);
 
-    // Crear hoja temporal con los datos visibles
     const rangoTotal = hojaOrigen.getDataRange();
     const tempSheet = ss.insertSheet("TEMP_FILTER_EXPORT");
-    rangoTotal.copyTo(tempSheet.getRange(1, 1), { contentsOnly: true });
+    tempSheet.hideSheet();
 
-    ss.toast("Procesando columnas...", "Paso 2/3", -1);
+    // Copiamos todo a la temporal para respetar el filtrado visual inicial (Lógica Rápida)
+    rangoTotal.copyTo(tempSheet.getRange(1, 1));
 
-    const allData = tempSheet.getDataRange().getValues();
+    ss.toast("Procesando columnas e hipervínculos...", "Paso 2/3", -1);
+
+    const rangeTemp = tempSheet.getDataRange();
+    const allData = rangeTemp.getDisplayValues(); 
+    const allFormulas = rangeTemp.getFormulas(); 
     const encabezados = allData[0];
 
     const indices = columnasDeseadas.map(col => {
@@ -48,9 +50,16 @@ function exportarFilasVisiblesAFijo() {
     const salida = [["ENVIAR"].concat(columnasDeseadas)];
 
     for (let i = 1; i < allData.length; i++) {
-      const fila = allData[i];
-      if (fila.some(v => v !== "" && v !== null)) {
-        salida.push([""].concat(indices.map(ix => fila[ix] ?? "")));
+      const filaValores = allData[i];
+      const filaFormulas = allFormulas[i];
+
+      if (filaValores.some(v => v !== "" && v !== null)) {
+        const nuevaFila = indices.map(ix => {
+          const formula = filaFormulas[ix];
+          const valorVisual = filaValores[ix];
+          return (formula && formula.startsWith("=")) ? formula : (valorVisual || "");
+        });
+        salida.push([""].concat(nuevaFila));
       }
     }
 
@@ -61,7 +70,6 @@ function exportarFilasVisiblesAFijo() {
     ss.toast("Creando en archivo destino...", "Paso 3/3", -1);
     const ssDestino = SpreadsheetApp.openById(ID_DESTINO);
 
-    // Evitar duplicados
     let nombreHoja = baseName;
     let contador = 1;
     while (ssDestino.getSheetByName(nombreHoja)) nombreHoja = `${baseName} (${contador++})`;
@@ -69,7 +77,7 @@ function exportarFilasVisiblesAFijo() {
     const hojaNueva = ssDestino.insertSheet(nombreHoja);
     hojaNueva.getRange(1, 1, salida.length, salida[0].length).setValues(salida);
 
-    // ===== Formato =====
+    // 🎨 Formato
     hojaNueva.setFrozenRows(1);
     hojaNueva.setFrozenColumns(1);
     const numColsFinal = salida[0].length;
@@ -80,27 +88,36 @@ function exportarFilasVisiblesAFijo() {
       .setFontSize(10)
       .setHorizontalAlignment("center");
 
-    // Anchos: 50 px para ENVIAR, Intermediario, Operación, Ficha, REF, Nave; 100 px para el resto
+    // --- FILA DE FECHA AMARILLA BAJO "OPERACIÓN" ---
+    const ultimaFilaData = hojaNueva.getLastRow();
+    const filaFecha = ultimaFilaData + 1;
+    const fechaHoy = Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), "dd/MM/yyyy");
+    
+    const celdaAmarilla = hojaNueva.getRange(filaFecha, 3); // Columna 3 es "Operación"
+    celdaAmarilla.setValue(fechaHoy)
+                 .setBackground("yellow")
+                 .setFontWeight("bold")
+                 .setHorizontalAlignment("center");
+
+    // === Anchos de columnas ===
     const SMALL = new Set(["ENVIAR", "Intermediario", "Operación", "Ficha", "REF", "Nave"]);
-    const headersFinal = salida[0]; // ["ENVIAR", ...columnasDeseadas]
+    const headersFinal = salida[0];
+
     for (let c = 0; c < headersFinal.length; c++) {
       const header = headersFinal[c];
-      hojaNueva.setColumnWidth(c + 1, SMALL.has(header) ? 50 : 100);
+      hojaNueva.setColumnWidth(c + 1, SMALL.has(header) ? 50 : 130);
     }
-    // ====================
 
     actualizarMenu(ssDestino, hojaNueva);
 
     SpreadsheetApp.flush();
     ss.toast("¡Completado!", "✅", 2);
 
-    ui.alert(`✅ Exportado`, `"${nombreHoja}" creado con ${salida.length - 1} filas.`, ui.ButtonSet.OK);
+    ui.alert(`✅ Exportado`, `"${nombreHoja}" creado con éxito.`, ui.ButtonSet.OK);
 
   } catch (err) {
-    try {
-      const temp = ss.getSheetByName("TEMP_FILTER_EXPORT");
-      if (temp) ss.deleteSheet(temp);
-    } catch (e) {}
+    const temp = ss.getSheetByName("TEMP_FILTER_EXPORT");
+    if (temp) ss.deleteSheet(temp);
     ui.alert("❌ Error", err.message, ui.ButtonSet.OK);
   }
 }

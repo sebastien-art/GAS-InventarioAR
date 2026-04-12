@@ -1,6 +1,6 @@
 /**
- * ACTUALIZACIÓN: Importación con formatos visuales (getDisplayValues)
- * Mantiene símbolos de moneda, decimales y formatos de fecha del origen.
+ * ACTUALIZACIÓN: Importación con formatos visuales e Hipervínculos.
+ * Mantiene símbolos de moneda, decimales, fechas y links (HYPERLINK).
  */
 
 /************* CONFIG *************/
@@ -33,6 +33,19 @@ const ENCAB_TERRENOS = [
   "Contacto","Factibilidad de energia","Detalles de aportación"
 ];
 
+/************* MENÚ *************/
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+  ui.createMenu("⚙️ Acciones")
+    .addItem("Actualizar inventario ahora", "copiarDatosInventario")
+    .addSeparator()
+    .addItem("Actualizar solo Naves", "actualizarNaves")
+    .addItem("Actualizar solo Terrenos", "actualizarTerrenos")
+    .addSeparator()
+    .addItem("Probar conexión", "probarConexion")
+    .addToUi();
+}
+
 /************* FUNCIONES PRINCIPALES *************/
 function copiarDatosInventario() {
   const t0 = Date.now();
@@ -59,7 +72,7 @@ function probarConexion() {
   }
 }
 
-/************* COPIA ORDENADA CON FORMATO VISUAL *************/
+/************* COPIA ORDENADA CON FORMATO VISUAL E HIPERVÍNCULOS *************/
 function copiarHojaSegura_(nombreHoja, headersDestino) {
   const libroOrigen  = SpreadsheetApp.openById(ID_ORIGEN);
   const libroDestino = SpreadsheetApp.openById(ID_DESTINO);
@@ -71,36 +84,34 @@ function copiarHojaSegura_(nombreHoja, headersDestino) {
 
   if (hojaOrigen.getFilter()) hojaOrigen.getFilter().remove();
 
-  // OBTENEMOS VALORES VISUALES (Tal cual se ven en la pantalla)
   const rangeOrigen = hojaOrigen.getDataRange();
   const displayValues = rangeOrigen.getDisplayValues(); 
+  const formulas = rangeOrigen.getFormulas(); // Capturamos los =HYPERLINK
   
   const encabezadosOrigen = displayValues[0].map(h => String(h).trim());
   const bodyDisplay = displayValues.slice(1);
+  const bodyFormulas = formulas.slice(1);
 
-  // Mapa normalizado de encabezados origen para búsqueda rápida
   const mapaOrigen = {};
   encabezadosOrigen.forEach((h, i) => mapaOrigen[normalize_(h)] = i);
 
-  // Índices de columnas según encabezado destino
   const idxs = headersDestino.map(h => {
     const n = normalize_(h);
     return n in mapaOrigen ? mapaOrigen[n] : null;
   });
 
-  // Log de advertencia si faltan columnas
-  const noEncontrados = headersDestino.filter((h, i) => idxs[i] === null);
-  if (noEncontrados.length)
-    Logger.log(`⚠️ [${nombreHoja}] No encontrados: ${noEncontrados.join(", ")}`);
-
-  // CONSTRUCCIÓN DEL CUERPO (Copiando el formato visual de todas las celdas)
   const cuerpoOrdenado = bodyDisplay
-    .filter(fila => fila.some(celda => celda !== "")) // Quitar filas vacías
-    .map(fila => {
-      return idxs.map(idxOriginal => (idxOriginal === null ? "" : fila[idxOriginal]));
+    .filter(fila => fila.some(celda => celda !== "")) 
+    .map((fila, i) => {
+      return idxs.map(idxOriginal => {
+        if (idxOriginal === null) return "";
+        // Si hay una fórmula (Link), traemos la fórmula; si no, el valor visual
+        const cellFormula = bodyFormulas[i][idxOriginal];
+        return (cellFormula && cellFormula.startsWith("=")) ? cellFormula : fila[idxOriginal];
+      });
     });
 
-  // Lógica de Fill-Down para la columna "Fecha" (si existe en el destino)
+  // Lógica de Fill-Down para la columna "Fecha"
   const idxDestFecha = headersDestino.findIndex(h => normalize_(h) === "fecha");
   if (idxDestFecha !== -1) {
     let ultimaFechaValida = "";
@@ -115,11 +126,11 @@ function copiarHojaSegura_(nombreHoja, headersDestino) {
 
   const salida = [headersDestino, ...cuerpoOrdenado];
 
-  // Pegar en destino
+  // Pegar en destino usando setValues (procesa tanto texto como fórmulas que inicien con =)
   hojaDestino.clearContents();
   hojaDestino.getRange(1, 1, salida.length, headersDestino.length).setValues(salida);
 
-  SpreadsheetApp.getActive().toast(`✅ ${nombreHoja}: ${cuerpoOrdenado.length} filas con formato copiadas`);
+  SpreadsheetApp.getActive().toast(`✅ ${nombreHoja}: ${cuerpoOrdenado.length} filas con links copiadas`);
 }
 
 /************* HELPERS *************/

@@ -1,5 +1,5 @@
 /**
- * Lanza el Sidebar usando el archivo HTML externo (SidebarHTML.html).
+ * Lanza el Sidebar del buscador.
  */
 function showNaveSidebar() {
   try {
@@ -13,71 +13,66 @@ function showNaveSidebar() {
 }
 
 /**
- * Limpia el caché de la hoja Naves.
+ * BUSCA EL LINK DIRECTO EN LA COLUMNA "Ficha" DE LA HOJA LOCAL.
+ * Como importas los datos diario, esta función solo extrae el link de la celda.
  */
-function limpiarCacheNaves() {
-  const cache = CacheService.getScriptCache();
-  cache.remove("nave_headers");
-  cache.remove("nave_refcol");
-  cache.remove("nave_refs");
+function obtenerLinkFichaDesdeCelda(ref) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName("Naves");
+  if (!sh) return "";
+
+  const data = sh.getDataRange().getDisplayValues(); 
+  const formulas = sh.getDataRange().getFormulas();
+  const headers = data[0];
+  
+  const colRefIdx = headers.indexOf("REF");
+  const colFichaIdx = headers.indexOf("Ficha");
+  
+  if (colRefIdx === -1 || colFichaIdx === -1) return "";
+
+  const target = ref ? ref.toString().trim().toUpperCase() : "";
+  if (!target) return "";
+
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][colRefIdx].trim().toUpperCase() === target) {
+      const formula = formulas[i][colFichaIdx];
+      // Extrae la URL de la fórmula =HYPERLINK("URL", "OK")
+      if (formula && formula.includes("HYPERLINK")) {
+        const matches = formula.match(/"([^"]+)"/);
+        return matches ? matches[1] : "";
+      }
+      return ""; 
+    }
+  }
+  return "";
 }
 
 /**
- * Se dispara automáticamente al editar la hoja.
- * Si el cambio fue en "Naves", invalida el caché.
+ * BUSCAR DATOS TÉCNICOS EN EL ARCHIVO MAESTRO
  */
-function onEdit(e) {
-  const hoja = e.source.getActiveSheet();
-  if (hoja.getName() === "Naves") {
-    limpiarCacheNaves();
-  }
-}
-
 function buscarNaveEnServidor(ref) {
   if (!ref) return "Error: No escribiste nada";
-  
   try {
-    const id = "1jHh3SUkVrQtOZPQ2T2iOhcXF_FbjdXivt3uuBYfYHz0";
-    const cache = CacheService.getScriptCache();
+    const id = "1jHh3SUkVrQtOZPQ2T2iOhcXF_FbjdXivt3uuBYfYHz0"; // ID de tu base maestra
     const target = ref.toString().trim().toUpperCase();
-
-    // 1. Conexión rápida
     const ss = SpreadsheetApp.openById(id);
     const sh = ss.getSheetByName("Naves");
-    
-    // 2. Traemos TODA la columna REF y los Encabezados de un solo golpe (Esto es lo que tarda)
-    // Usamos getValues() una sola vez para ser más eficientes
     const dataRange = sh.getDataRange().getValues();
     const headers = dataRange[0];
     const colRefIdx = headers.indexOf("REF");
 
-    if (colRefIdx === -1) return "Error: No se encontró columna REF";
-
-    // 3. Buscamos la fila en el array (esto es instantáneo en memoria)
-    // Empezamos desde i=1 para saltar encabezados
     let rowIndex = -1;
     for (let i = 1; i < dataRange.length; i++) {
-      if (dataRange[i][colRefIdx].toString().trim().toUpperCase() === target) {
+      if (dataRange[i][colRefIdx] && dataRange[i][colRefIdx].toString().trim().toUpperCase() === target) {
         rowIndex = i;
         break;
       }
     }
 
     if (rowIndex === -1) return "No se encontró la REF: " + target;
-
-    // 4. Extraemos los datos de esa fila
+    
     const rowData = dataRange[rowIndex];
-
-    // 5. Mapeo de campos
-    const campos = [
-      "Intermediario","Operación","Ficha","REF","Teléfono o link","Nombre","Estado","Zona Principal","Sub Zona","Desarrollador",
-      "Parque","Nave","M2 de construcción","M2 de terreno","M2 mínimos rentables","Asking price /m2","Mantenimiento / m2",
-      "Energía (kVAs)","Disponibilidad","Comentarios","Renta total","Mantenimiento total",
-      "Coordenadas","Ubicación","Andenes de carga","Rampas","A piso", "Resistencia de piso (espesor, resistencia tonelada por m2)","Altura libre",
-      "Altura máxima","Tipo de construcción","Tipo de techo","% Skylight",
-      "Seguridad 24/7","Oficinas (m2 o %)","Moneda del contrato","Año de construcción",
-      "Protección contra incendios","Plazo mínimo de contrato","Gas natural","Caseta de seguridad privada","ID de carpeta de fotos"
-    ];
+const campos = ["Intermediario","Operación","Ficha","REF","Estado","Zona Principal","Sub Zona","Desarrollador","Parque","Nave","M2 de construcción","M2 de terreno","M2 mínimos rentables","Asking price /m2","Mantenimiento / m2","Energía (kVAs)","Disponibilidad","Comentarios","Renta total","Mantenimiento total","Coordenadas","Ubicación","Andenes de carga","Rampas","A piso", "Resistencia de piso (espesor, resistencia tonelada por m2)","Altura libre","Altura máxima","Tipo de construcción","Tipo de techo","% Skylight","Seguridad 24/7","Oficinas (m2 o %)","Moneda del contrato","Año de construcción","Protección contra incendios","Plazo mínimo de contrato","Gas natural","Caseta de seguridad privada","ID de carpeta de fotos"];
 
     let res = {};
     campos.forEach(c => {
@@ -85,13 +80,9 @@ function buscarNaveEnServidor(ref) {
       if (idx !== -1) {
         let valor = rowData[idx];
         res[c] = (valor !== "" && valor !== null) ? valor : "---";
-      } else {
-        res[c] = "---";
       }
     });
-
     return JSON.stringify(res);
-    
   } catch (err) {
     return "Fallo en servidor: " + err.message;
   }
