@@ -2,7 +2,7 @@
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu("⚙️ Acciones")
-    .addItem("Actualizar inventario ahora", "copiarDatosInventario")
+    .addItem("Actualizar todo ahora", "copiarDatosInventario")
     .addSeparator()
     .addItem("Actualizar solo Naves", "actualizarNaves")
     .addItem("Actualizar solo Terrenos", "actualizarTerrenos")

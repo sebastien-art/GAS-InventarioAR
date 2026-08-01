@@ -17,7 +17,7 @@ function exportarFilasVisiblesAFijo() {
   const columnasDeseadas = [
     "Intermediario", "Operación", "Ficha", "REF", "Estado", "Zona Principal", "Sub Zona",
     "Desarrollador", "Parque", "Nave", "M2 de construcción", "M2 de terreno",
-    "Asking price /m2", "Mantenimiento / m2", "Disponibilidad","Energía (kVAs)", "Comentarios", "Coordenadas", "Ubicación", "Altura libre", "Altura máxima"
+    "Asking price /m2", "Precio total", "Mantenimiento / m2", "Disponibilidad","Energía (kVAs)", "Comentarios", "Coordenadas", "Ubicación", "Altura libre", "Altura máxima"
   ];
 
   try {
@@ -39,6 +39,7 @@ function exportarFilasVisiblesAFijo() {
     const rangeTemp = tempSheet.getDataRange();
     const allData = rangeTemp.getDisplayValues(); 
     const allFormulas = rangeTemp.getFormulas(); 
+    const allRichTexts = rangeTemp.getRichTextValues();
     const encabezados = allData[0];
 
     const indices = columnasDeseadas.map(col => {
@@ -48,18 +49,33 @@ function exportarFilasVisiblesAFijo() {
     });
 
     const salida = [["ENVIAR"].concat(columnasDeseadas)];
+    const richTextSalida = [[null].concat(columnasDeseadas.map(() => null))];
 
     for (let i = 1; i < allData.length; i++) {
       const filaValores = allData[i];
       const filaFormulas = allFormulas[i];
+      const filaRichTexts = allRichTexts[i];
 
       if (filaValores.some(v => v !== "" && v !== null)) {
+        const nuevaFilaRichText = [null];
         const nuevaFila = indices.map(ix => {
           const formula = filaFormulas[ix];
           const valorVisual = filaValores[ix];
-          return (formula && formula.startsWith("=")) ? formula : (valorVisual || "");
+          const richTextVal = filaRichTexts[ix];
+          
+          if (formula && formula.startsWith("=")) {
+            nuevaFilaRichText.push(null);
+            return formula;
+          } else if (richTextVal && richTextVal.getLinkUrl()) {
+            nuevaFilaRichText.push(richTextVal);
+            return valorVisual || "";
+          } else {
+            nuevaFilaRichText.push(null);
+            return (valorVisual || "");
+          }
         });
         salida.push([""].concat(nuevaFila));
+        richTextSalida.push(nuevaFilaRichText);
       }
     }
 
@@ -75,7 +91,22 @@ function exportarFilasVisiblesAFijo() {
     while (ssDestino.getSheetByName(nombreHoja)) nombreHoja = `${baseName} (${contador++})`;
 
     const hojaNueva = ssDestino.insertSheet(nombreHoja);
-    hojaNueva.getRange(1, 1, salida.length, salida[0].length).setValues(salida);
+    
+    for (let r = 0; r < salida.length; r++) {
+      for (let c = 0; c < salida[r].length; c++) {
+        const celdaDestino = hojaNueva.getRange(r + 1, c + 1);
+        const valor = salida[r][c];
+        const rt = richTextSalida[r][c];
+        
+        if (valor && valor.toString().startsWith("=")) {
+          celdaDestino.setFormula(valor);
+        } else if (rt) {
+          celdaDestino.setRichTextValue(rt);
+        } else {
+          celdaDestino.setValue(valor);
+        }
+      }
+    }
 
     // 🎨 Formato
     hojaNueva.setFrozenRows(1);
@@ -88,16 +119,41 @@ function exportarFilasVisiblesAFijo() {
       .setFontSize(10)
       .setHorizontalAlignment("center");
 
-    // --- FILA DE FECHA AMARILLA BAJO "OPERACIÓN" ---
-    const ultimaFilaData = hojaNueva.getLastRow();
-    const filaFecha = ultimaFilaData + 1;
-    const fechaHoy = Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), "dd/MM/yyyy");
-    
-    const celdaAmarilla = hojaNueva.getRange(filaFecha, 3); // Columna 3 es "Operación"
-    celdaAmarilla.setValue(fechaHoy)
-                 .setBackground("yellow")
-                 .setFontWeight("bold")
-                 .setHorizontalAlignment("center");
+// --- FECHA DE CREACIÓN (VISIBLE + OCULTA) ---
+const ultimaFilaData = hojaNueva.getLastRow();
+const filaFecha = ultimaFilaData + 1;
+
+// Fecha completa con hora (para el archivado)
+const fechaCreacion = new Date();
+
+// Visible para el usuario (igual que hoy)
+const fechaVisible = Utilities.formatDate(
+  fechaCreacion,
+  ss.getSpreadsheetTimeZone(),
+  "dd/MM/yyyy"
+);
+
+// Valor interno con fecha y hora
+const fechaInterna = Utilities.formatDate(
+  fechaCreacion,
+  ss.getSpreadsheetTimeZone(),
+  "yyyy-MM-dd HH:mm:ss"
+);
+
+// Celda amarilla visible
+hojaNueva.getRange(filaFecha, 3)
+  .setValue(fechaVisible)
+  .setBackground("yellow")
+  .setFontWeight("bold")
+  .setHorizontalAlignment("center");
+
+// Guardar fecha interna en AA1 (columna oculta)
+hojaNueva.getRange("AA1").setValue(fechaInterna);
+
+// Ocultar la columna AA únicamente la primera vez
+if (!hojaNueva.isColumnHiddenByUser(27)) {
+  hojaNueva.hideColumns(27);
+}
 
     // === Anchos de columnas ===
     const SMALL = new Set(["ENVIAR", "Intermediario", "Operación", "Ficha", "REF", "Nave"]);
@@ -123,23 +179,47 @@ function exportarFilasVisiblesAFijo() {
 }
 
 function actualizarMenu(ssDestino, hojaNueva) {
-  let hojaMenu = ssDestino.getSheetByName("Menú");
-  if (!hojaMenu) hojaMenu = ssDestino.insertSheet("Menú", 0);
+  const hojaMenu = ssDestino.getSheetByName("Menú");
+  if (!hojaMenu) return;
 
-  if (hojaMenu.getLastRow() < 1) {
-    hojaMenu.getRange("A1:B1").setValues([["Propuestas/Reportes", "Navegar"]])
-      .setBackground("#b6d7a8").setFontWeight("bold");
-    hojaMenu.setFrozenRows(1).setColumnWidth(1, 250).setColumnWidth(2, 90);
-  }
+  const ultimaFila = hojaMenu.getLastRow();
+  if (ultimaFila < 1) return;
 
+  // 1. Leer encabezados existentes en la Fila 1
+  const ultimaColumna = hojaMenu.getLastColumn();
+  const encabezados = hojaMenu.getRange(1, 1, 1, ultimaColumna).getValues()[0];
+
+  // 2. Buscar dinámicamente las posiciones de las columnas por encabezado
+  const idxNombre = encabezados.indexOf("Propuestas/Reportes");
+  const idxNavegar = encabezados.indexOf("Navegar");
+  const idxFecha = encabezados.indexOf("Fecha de creación");
+
+  const filaNueva = ultimaFila + 1;
   const nombre = hojaNueva.getName();
-  const fila = hojaMenu.getLastRow() + 1;
 
-  hojaMenu.getRange(fila, 1).setValue(nombre);
-  hojaMenu.getRange(fila, 2)
+  // 3. Escribir Nombre si existe la columna "Propuestas/Reportes" (o columna 1 si no la halla)
+  const colNombre = idxNombre !== -1 ? idxNombre + 1 : 1;
+  hojaMenu.getRange(filaNueva, colNombre).setValue(nombre);
+
+  // 4. Escribir Enlace si existe la columna "Navegar" (o columna 2 si no la halla)
+  const colNavegar = idxNavegar !== -1 ? idxNavegar + 1 : 2;
+  hojaMenu.getRange(filaNueva, colNavegar)
     .setFormula(`=HYPERLINK("#gid=${hojaNueva.getSheetId()}", "VER DATOS")`)
     .setBackground("#007bff")
     .setFontColor("white")
     .setFontWeight("bold")
     .setHorizontalAlignment("center");
+
+  // 5. Escribir Fecha si existe la columna "Fecha de creación"
+  if (idxFecha !== -1) {
+    const fechaHoy = Utilities.formatDate(
+      new Date(),
+      ssDestino.getSpreadsheetTimeZone(),
+      "dd/MM/yyyy"
+    );
+
+    hojaMenu.getRange(filaNueva, idxFecha + 1)
+      .setValue(fechaHoy)
+      .setHorizontalAlignment("center");
+  }
 }

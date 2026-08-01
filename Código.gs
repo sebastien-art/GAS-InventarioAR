@@ -10,7 +10,7 @@ const ID_DESTINO = "1TNw7t5_kog5WeSgbVByKQa4kGDNNdnXhCw8ft3SRGe4"; // INVENTARIO
 /************* ENCABEZADOS DESTINO *************/
 const ENCAB_NAVES = [
   "Fecha","Intermediario","Operación","Ficha","REF","Estado","Zona Principal","Sub Zona",
-  "M2 de construcción","M2 de terreno","Asking price /m2","Mantenimiento / m2",
+  "M2 de construcción","M2 de terreno","Asking price /m2", "Precio total", "Mantenimiento / m2",
   "Desarrollador","Parque","Nave","Disponibilidad","Comentarios","Energía (kVAs)",
   "Renta total","Mantenimiento total","Coordenadas","Ubicación","Rango m2",
   "M2 mínimos rentables","Plazo mínimo de contrato","Comisión","Link","Altura libre",
@@ -33,30 +33,25 @@ const ENCAB_TERRENOS = [
   "Contacto","Factibilidad de energia","Detalles de aportación"
 ];
 
-/************* MENÚ *************/
-function onOpen() {
-  const ui = SpreadsheetApp.getUi();
-  ui.createMenu("⚙️ Acciones")
-    .addItem("Actualizar inventario ahora", "copiarDatosInventario")
-    .addSeparator()
-    .addItem("Actualizar solo Naves", "actualizarNaves")
-    .addItem("Actualizar solo Terrenos", "actualizarTerrenos")
-    .addSeparator()
-    .addItem("Probar conexión", "probarConexion")
-    .addToUi();
-}
-
 /************* FUNCIONES PRINCIPALES *************/
 function copiarDatosInventario() {
   const t0 = Date.now();
+
   actualizarNaves();
+  SpreadsheetApp.flush();
+
   actualizarTerrenos();
-  
+  SpreadsheetApp.flush();
+
   const ssDest = SpreadsheetApp.openById(ID_DESTINO);
   const timestamp = Utilities.formatDate(new Date(), "America/Mexico_City", "dd/MM HH:mm");
   ssDest.rename(`INVENTARIO IEM (Actualizado: ${timestamp})`);
-  
-  SpreadsheetApp.getActive().toast(`✅ Inventario actualizado (${((Date.now()-t0)/1000).toFixed(1)}s)`);
+
+  try {
+    SpreadsheetApp.getActiveSpreadsheet().toast(`✅ Inventario actualizado (${((Date.now()-t0)/1000).toFixed(1)}s)`);
+  } catch(e) {
+    console.log(`Inventario actualizado en ${((Date.now()-t0)/1000).toFixed(1)}s`);
+  }
 }
 
 function actualizarNaves()    { copiarHojaSegura_("Naves", ENCAB_NAVES); }
@@ -75,22 +70,43 @@ function probarConexion() {
 /************* COPIA ORDENADA CON FORMATO VISUAL E HIPERVÍNCULOS *************/
 function copiarHojaSegura_(nombreHoja, headersDestino) {
   const libroOrigen  = SpreadsheetApp.openById(ID_ORIGEN);
+  SpreadsheetApp.flush();
+  Utilities.sleep(3000); // ✅ fuerza sincronización antes de leer
+
   const libroDestino = SpreadsheetApp.openById(ID_DESTINO);
   const hojaOrigen   = libroOrigen.getSheetByName(nombreHoja);
   const hojaDestino  = libroDestino.getSheetByName(nombreHoja);
-  
+
   if (!hojaOrigen || !hojaDestino)
-    throw new Error(`❌ Falta hoja ${nombreHoja} en origen o destino`);
+    throw new Error(`❌ Falta hoja ${nombreHoja}`);
 
   if (hojaOrigen.getFilter()) hojaOrigen.getFilter().remove();
 
-  const rangeOrigen = hojaOrigen.getDataRange();
-  const displayValues = rangeOrigen.getDisplayValues(); 
-  const formulas = rangeOrigen.getFormulas(); // Capturamos los =HYPERLINK
-  
+  const rangeOrigen   = hojaOrigen.getDataRange();
+  const displayValues = rangeOrigen.getDisplayValues();
+  const rawValues     = rangeOrigen.getValues();
+  const richTexts     = rangeOrigen.getRichTextValues(); // ✅ solo para Ficha
+
+  // ✅ Fórmulas SOLO de la columna Ficha, no de todo el rango
   const encabezadosOrigen = displayValues[0].map(h => String(h).trim());
+  const idxFichaOrigen = encabezadosOrigen.findIndex(h => normalize_(h) === normalize_("Ficha"));
+  
+  let formulasFicha = []; // array de strings, una por fila (sin encabezado)
+  if (idxFichaOrigen !== -1) {
+    const colFicha = idxFichaOrigen + 1; // getRange usa base 1
+    const numFilas = rangeOrigen.getNumRows() - 1;
+    formulasFicha = hojaOrigen
+      .getRange(2, colFicha, numFilas, 1)
+      .getFormulas()
+      .map(r => r[0]);
+  }
+
+  console.log(`[${nombreHoja}] Rango: ${rangeOrigen.getNumRows()} filas × ${rangeOrigen.getNumColumns()} cols`);
+  console.log(`[${nombreHoja}] idx Ficha en origen: ${idxFichaOrigen}`);
+
   const bodyDisplay = displayValues.slice(1);
-  const bodyFormulas = formulas.slice(1);
+  const bodyRaw     = rawValues.slice(1);
+  const bodyRich    = richTexts.slice(1);
 
   const mapaOrigen = {};
   encabezadosOrigen.forEach((h, i) => mapaOrigen[normalize_(h)] = i);
@@ -101,17 +117,52 @@ function copiarHojaSegura_(nombreHoja, headersDestino) {
   });
 
   const cuerpoOrdenado = bodyDisplay
-    .filter(fila => fila.some(celda => celda !== "")) 
+    .filter((fila, i) => {
+      return fila.some(c => c !== "") ||
+             bodyRaw[i].some(c => c !== "" && c !== false);
+    })
     .map((fila, i) => {
       return idxs.map(idxOriginal => {
         if (idxOriginal === null) return "";
-        // Si hay una fórmula (Link), traemos la fórmula; si no, el valor visual
-        const cellFormula = bodyFormulas[i][idxOriginal];
-        return (cellFormula && cellFormula.startsWith("=")) ? cellFormula : fila[idxOriginal];
+
+        // ✅ Solo Ficha recibe tratamiento de fórmula/hyperlink
+        if (idxOriginal === idxFichaOrigen) {
+
+          // 1. Fórmula =HYPERLINK en Ficha
+          const formula = formulasFicha[i] || "";
+          if (formula.startsWith("=")) return formula;
+
+          // 2. Rich Text con URL en Ficha
+          try {
+            const rt = bodyRich[i][idxOriginal];
+            if (rt) {
+              const runs = rt.getRuns();
+              for (const run of runs) {
+                const url = run.getLinkUrl();
+                if (url) {
+                  const texto = rt.getText() || url;
+                  return `=HYPERLINK("${url}","${texto.replace(/"/g,'')}")`;
+                }
+              }
+            }
+          } catch(e) {}
+
+          // 3. Si no hay fórmula ni link, valor display
+          return fila[idxOriginal];
+        }
+
+        // ✅ Todas las demás columnas: solo valor display (sin fórmulas)
+        const rawVal = bodyRaw[i][idxOriginal];
+        if (rawVal === true)  return "OK";
+        if (rawVal === false) return "";
+
+        return fila[idxOriginal];
       });
     });
 
-  // Lógica de Fill-Down para la columna "Fecha"
+  console.log(`[${nombreHoja}] Filas a escribir: ${cuerpoOrdenado.length}`);
+
+  // Fill-Down Fecha
   const idxDestFecha = headersDestino.findIndex(h => normalize_(h) === "fecha");
   if (idxDestFecha !== -1) {
     let ultimaFechaValida = "";
@@ -125,12 +176,14 @@ function copiarHojaSegura_(nombreHoja, headersDestino) {
   }
 
   const salida = [headersDestino, ...cuerpoOrdenado];
-
-  // Pegar en destino usando setValues (procesa tanto texto como fórmulas que inicien con =)
   hojaDestino.clearContents();
   hojaDestino.getRange(1, 1, salida.length, headersDestino.length).setValues(salida);
 
-  SpreadsheetApp.getActive().toast(`✅ ${nombreHoja}: ${cuerpoOrdenado.length} filas con links copiadas`);
+  try {
+    SpreadsheetApp.getActiveSpreadsheet().toast(`✅ ${nombreHoja}: ${cuerpoOrdenado.length} filas copiadas`);
+  } catch(e) {
+    console.log(`${nombreHoja}: ${cuerpoOrdenado.length} filas copiadas`);
+  }
 }
 
 /************* HELPERS *************/
